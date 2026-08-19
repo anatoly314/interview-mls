@@ -265,7 +265,7 @@ const placeholder = `<!doctype html>
 <meta charset="utf-8"><title>PDF Transaction Parser</title>
 <body style="font:16px system-ui;max-width:40em;margin:4em auto">
 <h1>PDF Transaction Parser</h1>
-<p>The React UI lands in R3. The api is up: try
+<p>UI build not found — build the frontend with <code>make web</code> or run via docker compose. The api is up: try
 <code>POST /jobs</code>, <code>GET /jobs</code>, <code>GET /ws</code>.</p>
 </body>`
 

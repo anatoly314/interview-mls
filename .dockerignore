@@ -1,0 +1,8 @@
+# node_modules must not be copied in: npm ci installs the linux-arch binaries
+# itself, and a host copy would shadow them.
+web/node_modules
+web/dist
+web/tsconfig.tsbuildinfo
+.git
+.DS_Store
+bin

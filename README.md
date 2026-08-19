@@ -117,7 +117,7 @@ sequenceDiagram
     end
 ```
 
-Status flow: `queued → processing → done | failed`.
+Status flow: `queued → processing → done | failed` (transient failure: → queued, bounded by attempts).
 
 ## How it works
 
@@ -129,11 +129,14 @@ Status flow: `queued → processing → done | failed`.
 
 ### Failure handling
 
-- **Crash recovery is lease expiry, not a special code path.** A worker killed mid-parse leaves its row at `processing` with a lease about to expire. The same claim query reclaims it once `lease_expires_at < now()` — no separate requeue logic. `attempt` bounds the retries; a small janitor (one `UPDATE` on a ticker) moves rows past `max_attempts` to `failed` so they stop being reclaimed.
+- **Crash recovery is lease expiry, not a special code path.** A worker killed mid-parse leaves its row at `processing` with a lease about to expire. The same claim query reclaims it once `lease_expires_at < now()` — no separate requeue logic. `attempt` bounds the retries; a small janitor (one `UPDATE` on a ticker) moves rows at-or-above `max_attempts` to `failed` so they stop being reclaimed.
 - **The fencing token.** A worker that's alive but partitioned from the db doesn't know its lease expired, so a second worker can legitimately claim the same job — both now run. The terminal write is fenced on the lease:
 
   ```sql
-  UPDATE jobs SET status='done', csv_key=$2 WHERE id=$1 AND lease_token=$3
+  UPDATE jobs SET
+      status = 'done', csv_key = $3, error = NULL,
+      lease_token = NULL, lease_expires_at = NULL, updated_at = now()
+  WHERE id = $1 AND lease_token = $2::uuid
   ```
 
   The stale worker's write matches zero rows, and it knows it lost the race. The duplicate MinIO write is harmless because the csv key is deterministic (`jobs/{id}/result.csv`) — at-least-once delivery, effectively-once effects.
@@ -145,7 +148,7 @@ Status flow: `queued → processing → done | failed`.
 
 ### The realtime paths
 
-- **Why gRPC is a stream, not a unary call.** A fire-and-forget `NotifyStatus` RPC is barely more than an HTTP POST — and invites "why not have the api `LISTEN` too?" Because `pg_notify` is a broadcast primitive and cancellation is a routing problem: when a user clicks Cancel, the api must reach the *one* worker holding that job's lease, not every worker. So each worker opens a single long-lived bidirectional stream at startup — status events up, cancel commands down. One connection instead of one dial per event, worker liveness for free (stream closes → worker is gone → the api can shorten that worker's leases), and a real reconnect-with-backoff story.
+- **Why gRPC is a stream, not a unary call.** A fire-and-forget `NotifyStatus` RPC is barely more than an HTTP POST — and invites "why not have the api `LISTEN` too?" Because `pg_notify` is a broadcast primitive and cancellation is a routing problem: when a user clicks Cancel, the api must reach the *one* worker holding that job's lease, not every worker. So each worker opens a single long-lived bidirectional stream at startup — status events up, cancel commands down. One connection instead of one dial per event, worker liveness for free (stream closes → worker is gone, and could shorten that worker's leases — not implemented here, lease expiry already covers it), and a real reconnect-with-backoff story.
 - **Websocket is a hint, not the truth.** Push events can be missed (reconnect, race with subscribe). The UI fetches `GET /jobs` on load and reconnect, then treats ws events as incremental updates. State in Postgres is authoritative.
 
 ### Why no broker
@@ -168,7 +171,10 @@ Uploading an arbitrary real-bank pdf lands the job in `failed` — by design, wi
 
 ```
 ├── docker-compose.yml       # the whole system: infra + services, one command
+├── Makefile                 # build targets
+├── go.work                  # workspace for Go modules
 ├── proto/                   # jobs.proto (gRPC contract) + committed generated code
+├── samples/                 # committed sample statement pdfs
 ├── services/
 │   ├── api/                 # cmd/api, internal/{config,app,...}
 │   └── worker/              # cmd/worker, internal/{config,app,...}
@@ -178,11 +184,31 @@ Uploading an arbitrary real-bank pdf lands the job in `failed` — by design, wi
 
 Go services follow [golang-standards/project-layout](https://github.com/golang-standards/project-layout) (`cmd/` + `internal/`), CLIs are cobra-based, services configure via env vars (12-factor).
 
+## Make targets
+
+| Target | What |
+|---|---|
+| **up** | Build and start the whole system with Docker Compose |
+| **down** | Stop the system, keep data volumes |
+| **clean** | Stop the system and delete data volumes |
+| **build** | Go build all modules |
+| **test** | Go test all modules |
+| **vet** | Go vet all modules |
+| **proto** | Regenerate gRPC code from proto/jobs.proto |
+| **web** | Build the React UI locally into web/dist |
+| **pdfgen** | Generate sample statement PDFs |
+| **help** | List all targets |
+
+`make pdfgen` accepts overrides: `COUNT=10 PAGES=2 ROWS=25 SEED=42` (e.g. `make pdfgen COUNT=10`).
+
+**For reviewers:** `make up` is all you need — it builds and starts the system with one command.
+
 ## Ports
 
 | Service | Port | |
 |---|---|---|
 | api | 8080 | HTTP + UI |
 | api | 9090 | gRPC (internal) |
+| MinIO S3 API | 9000 | object storage |
 | MinIO console | 9001 | login `minioadmin`/`minioadmin` |
 | Postgres | 5432 | `mls`/`mls`, db `mls` |

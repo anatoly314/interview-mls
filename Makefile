@@ -1,6 +1,6 @@
 MODULES := proto services/api services/worker tools/pdfgen
 
-.PHONY: help up down build test vet proto pdfgen clean
+.PHONY: help up down build web test vet proto pdfgen clean
 
 help: ## list targets
 	@grep -E '^[a-z-]+:.*##' $(MAKEFILE_LIST) | awk -F ':.*## ' '{printf "  %-10s %s\n", $$1, $$2}'
@@ -13,6 +13,9 @@ down: ## stop the system, keep data volumes
 
 build: ## go build all modules
 	@for m in $(MODULES); do (cd ./$$m && go build ./...) || exit 1; done
+
+web: ## build the React UI locally into web/dist (docker build does this itself)
+	cd web && npm ci && npm run build
 
 test: ## go test all modules
 	@for m in $(MODULES); do (cd ./$$m && go test ./...) || exit 1; done
