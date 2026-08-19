@@ -6,7 +6,7 @@ Upload a bank-statement PDF. It gets parsed to CSV in the background. Watch the 
 
 ## Quick start
 
-**`make pdfgen` generates sample statement PDFs into `./samples/` — the pdfs to upload at localhost:8080. Not committed; generate them first. Requires Go.**
+**Three ready-to-upload sample statements ship in `./samples/`. `make pdfgen` regenerates them or makes more (requires Go).**
 
 ```bash
 make up

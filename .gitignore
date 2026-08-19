@@ -9,3 +9,7 @@ web/tsconfig.tsbuildinfo
 
 # parser test fixtures are committed on purpose
 !services/worker/internal/parser/testdata/*.pdf
+# committed demo samples
+!samples/statement-001.pdf
+!samples/statement-002.pdf
+!samples/statement-003.pdf
