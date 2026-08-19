@@ -13,6 +13,8 @@ docker compose up --build
 
 `PARSE_DELAY` (worker env, default `2s`) adds artificial processing delay so the `processing` state is visible in a demo. Set to `0` for real speed.
 
+See [Make targets](#make-targets) for common commands.
+
 ## Architecture
 
 ```mermaid
