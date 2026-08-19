@@ -1,0 +1,28 @@
+syntax = "proto3";
+
+package mls.v1;
+
+option go_package = "github.com/anatolyt/interview-mls/proto/gen/jobsv1";
+
+// JobEvents is served by the api; workers call it to report job status
+// transitions, which the api fans out to connected websocket clients.
+service JobEvents {
+  rpc NotifyStatus(NotifyStatusRequest) returns (NotifyStatusResponse);
+}
+
+enum JobStatus {
+  JOB_STATUS_UNSPECIFIED = 0;
+  JOB_STATUS_QUEUED = 1;
+  JOB_STATUS_PROCESSING = 2;
+  JOB_STATUS_DONE = 3;
+  JOB_STATUS_FAILED = 4;
+}
+
+message NotifyStatusRequest {
+  string job_id = 1;
+  JobStatus status = 2;
+  // set only when status == FAILED
+  string error = 3;
+}
+
+message NotifyStatusResponse {}
