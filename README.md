@@ -9,15 +9,17 @@ Upload a bank-statement PDF. It gets parsed to CSV in the background. Watch the 
 **Three ready-to-upload sample statements ship in `./samples/`. `make pdfgen` regenerates them or makes more (requires Go).**
 
 ```bash
-make up
-# open http://localhost:8080
+make up        # build and start everything; open http://localhost:8080
+make down      # stop the system, keep data volumes
+make pdfgen    # generate sample PDFs
+make help      # list all targets
 ```
 
 * make up runs docker compose up --build -d --wait
 
 `PARSE_DELAY` (worker env, default `2s`) adds artificial processing delay so the `processing` state is visible in a demo. Set to `0` for real speed.
 
-See [Make targets](#make-targets) for common commands.
+Everything else: see [Make targets](#make-targets).
 
 ## Architecture
 
