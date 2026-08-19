@@ -7,8 +7,8 @@ import (
 	"time"
 )
 
-// Transaction is one rendered table row. Amounts are integer cents so the
-// PDF and the ground-truth CSV can never disagree on rounding.
+// Transaction is one rendered table row. Amounts are integer cents so
+// formatting can never introduce a rounding surprise.
 type Transaction struct {
 	Date         time.Time
 	Description  string
@@ -26,11 +26,11 @@ type Statement struct {
 	Transactions  []Transaction
 }
 
-// DateLayout is the date format used in both the PDF and the CSV.
+// DateLayout is the date format used in the PDF.
 const DateLayout = "2006-01-02"
 
 // merchants are ASCII-only and comma-free: fpdf core fonts are latin-1, and a
-// comma would break the unquoted ground-truth CSV.
+// comma would force quoting in the CSV the worker emits.
 var merchants = []string{
 	"AMAZON MARKETPLACE",
 	"SHELL GAS STATION",
@@ -131,11 +131,11 @@ func FormatCents(c int64) string {
 	return fmt.Sprintf("%s%d.%02d", sign, c/100, c%100)
 }
 
-// Amount is the amount column exactly as it appears in the PDF and CSV.
+// Amount is the amount column exactly as it appears in the PDF.
 func (t Transaction) Amount() string { return FormatCents(t.AmountCents) }
 
-// Balance is the balance column exactly as it appears in the PDF and CSV.
+// Balance is the balance column exactly as it appears in the PDF.
 func (t Transaction) Balance() string { return FormatCents(t.BalanceCents) }
 
-// DateString is the date column exactly as it appears in the PDF and CSV.
+// DateString is the date column exactly as it appears in the PDF.
 func (t Transaction) DateString() string { return t.Date.Format(DateLayout) }

@@ -27,9 +27,9 @@ func NewRootCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "pdfgen",
-		Short: "Generate sample bank-statement PDFs with ground-truth CSVs",
-		Long: "pdfgen writes statement-NNN.pdf sample bank statements plus a matching\n" +
-			"statement-NNN.expected.csv holding exactly the rows rendered into each PDF.",
+		Short: "Generate sample bank-statement PDFs",
+		Long: "pdfgen writes statement-NNN.pdf sample bank statements in the fixed layout\n" +
+			"the worker's parser expects.",
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return run(cmd, opt)
@@ -66,17 +66,11 @@ func run(cmd *cobra.Command, opt options) error {
 			Rand:        r,
 		})
 
-		base := filepath.Join(opt.out, fmt.Sprintf("statement-%03d", i+1))
-		pdfPath := base + ".pdf"
-		csvPath := base + ".expected.csv"
-
+		pdfPath := filepath.Join(opt.out, fmt.Sprintf("statement-%03d.pdf", i+1))
 		if err := render.Render(st, pdfPath); err != nil {
 			return fmt.Errorf("render %s: %w", pdfPath, err)
 		}
-		if err := statement.WriteCSV(st, csvPath); err != nil {
-			return fmt.Errorf("write %s: %w", csvPath, err)
-		}
-		fmt.Fprintf(cmd.OutOrStdout(), "%s (%d rows)\n%s\n", pdfPath, len(st.Transactions), csvPath)
+		fmt.Fprintf(cmd.OutOrStdout(), "%s (%d rows)\n", pdfPath, len(st.Transactions))
 	}
 	return nil
 }

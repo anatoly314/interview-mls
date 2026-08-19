@@ -1,6 +1,8 @@
 module github.com/anatolyt/interview-mls/services/worker
 
-go 1.24
+go 1.24.1
+
+toolchain go1.24.4
 
 require (
 	github.com/anatolyt/interview-mls/proto v0.0.0
@@ -22,6 +24,7 @@ require (
 	github.com/jackc/puddle/v2 v2.2.2 // indirect
 	github.com/klauspost/compress v1.17.11 // indirect
 	github.com/klauspost/cpuid/v2 v2.2.9 // indirect
+	github.com/ledongthuc/pdf v0.0.0-20250511090121-5959a4027728 // indirect
 	github.com/minio/md5-simd v1.1.2 // indirect
 	github.com/pierrec/lz4/v4 v4.1.22 // indirect
 	github.com/rs/xid v1.6.0 // indirect

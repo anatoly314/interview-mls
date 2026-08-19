@@ -1,4 +1,4 @@
-// Command pdfgen generates sample bank-statement PDFs and their ground-truth CSVs.
+// Command pdfgen generates sample bank-statement PDFs.
 package main
 
 import (

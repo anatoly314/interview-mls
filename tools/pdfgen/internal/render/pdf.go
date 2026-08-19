@@ -47,8 +47,12 @@ func Render(st statement.Statement, path string) error {
 	pdf := fpdf.New("P", "mm", "A4", "")
 	pdf.SetMargins(15, 15, 15)
 	pdf.SetAutoPageBreak(false, 15) // rows per page is fixed by the caller, not by overflow
-	// Fixed timestamp keeps output byte-identical for a given seed.
-	pdf.SetCreationDate(time.Date(2024, time.January, 1, 0, 0, 0, 0, time.UTC))
+	// Fixed timestamps keep output stable for a given seed; ModDate otherwise
+	// defaults to time.Now(). (fpdf still emits font objects in map order, so
+	// the bytes are not fully reproducible -- the drawn content is.)
+	epoch := time.Date(2024, time.January, 1, 0, 0, 0, 0, time.UTC)
+	pdf.SetCreationDate(epoch)
+	pdf.SetModificationDate(epoch)
 
 	pdf.SetHeaderFunc(func() { drawHeader(pdf, st) })
 	pdf.SetFooterFunc(func() { drawFooter(pdf) })

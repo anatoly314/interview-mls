@@ -3,3 +3,6 @@ dist/
 .DS_Store
 *.pdf
 *.csv
+
+# parser test fixtures are committed on purpose
+!services/worker/internal/parser/testdata/*.pdf

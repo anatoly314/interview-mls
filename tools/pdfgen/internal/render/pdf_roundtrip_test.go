@@ -3,8 +3,8 @@ package render_test
 import (
 	"io"
 	"math/rand"
-	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -126,23 +126,43 @@ func TestRoundTripWholeDocument(t *testing.T) {
 	}
 }
 
-// TestDeterministic guards the --seed contract.
+// TestDeterministic guards the --seed contract: same seed, same rendered
+// content. It compares extracted cells rather than raw bytes -- fpdf emits its
+// font objects in Go map order, so two renders of the same statement are not
+// byte-identical even though every drawn cell is.
 func TestDeterministic(t *testing.T) {
 	dir := t.TempDir()
-	var prev string
+	var prev []string
 	for i := 0; i < 2; i++ {
 		st := statement.Generate(statement.Options{Pages: 1, RowsPerPage: 5, Rand: rand.New(rand.NewSource(7))})
 		p := filepath.Join(dir, "s.pdf")
 		if err := render.Render(st, p); err != nil {
 			t.Fatalf("render: %v", err)
 		}
-		b, err := os.ReadFile(p)
-		if err != nil {
-			t.Fatal(err)
+		got := extract(t, p)
+		if i > 0 && !slices.Equal(prev, got) {
+			t.Fatalf("same seed produced different content:\nfirst:  %q\nsecond: %q", prev, got)
 		}
-		if i > 0 && prev != string(b) {
-			t.Fatal("same seed produced different PDF bytes")
-		}
-		prev = string(b)
+		prev = got
 	}
+}
+
+// extract reads every page of the pdf at path back into its drawn cells.
+func extract(t *testing.T, path string) []string {
+	t.Helper()
+	f, r, err := pdf.Open(path)
+	if err != nil {
+		t.Fatalf("open pdf: %v", err)
+	}
+	defer f.Close()
+
+	var out []string
+	for p := 1; p <= r.NumPage(); p++ {
+		text, err := r.Page(p).GetPlainText(nil)
+		if err != nil {
+			t.Fatalf("page %d GetPlainText: %v", p, err)
+		}
+		out = append(out, cells(text)...)
+	}
+	return out
 }
