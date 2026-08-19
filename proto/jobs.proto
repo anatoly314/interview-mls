@@ -4,10 +4,15 @@ package mls.v1;
 
 option go_package = "github.com/anatolyt/interview-mls/proto/gen/jobsv1";
 
-// JobEvents is served by the api; workers call it to report job status
-// transitions, which the api fans out to connected websocket clients.
+// JobEvents is served by the api. Each worker opens exactly one long-lived
+// stream at startup and keeps it for the life of the process.
+//
+// It is bidirectional because cancellation is a routing problem: pg_notify
+// broadcasts, but a cancel has to reach the one worker currently holding the
+// job's lease. Status events flow worker->api and are fanned out to websocket
+// clients; control commands flow api->worker.
 service JobEvents {
-  rpc NotifyStatus(NotifyStatusRequest) returns (NotifyStatusResponse);
+  rpc Connect(stream WorkerEvent) returns (stream Command);
 }
 
 enum JobStatus {
@@ -18,11 +23,21 @@ enum JobStatus {
   JOB_STATUS_FAILED = 4;
 }
 
-message NotifyStatusRequest {
-  string job_id = 1;
-  JobStatus status = 2;
-  // set only when status == FAILED
-  string error = 3;
+enum CommandType {
+  COMMAND_TYPE_UNSPECIFIED = 0;
+  COMMAND_TYPE_CANCEL = 1;
 }
 
-message NotifyStatusResponse {}
+message WorkerEvent {
+  string job_id = 1;
+  JobStatus status = 2;
+  // set only when status == FAILED or a retry is queued after an error
+  string error = 3;
+  // identifies the sender so the api can route commands back to it
+  string worker_id = 4;
+}
+
+message Command {
+  string job_id = 1;
+  CommandType type = 2;
+}

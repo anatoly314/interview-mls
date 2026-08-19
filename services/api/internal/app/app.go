@@ -14,33 +14,52 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
-	"github.com/twmb/franz-go/pkg/kgo"
 	"google.golang.org/grpc"
 
 	jobsv1 "github.com/anatolyt/interview-mls/proto/gen/jobsv1"
 	"github.com/anatolyt/interview-mls/services/api/internal/config"
+	"github.com/anatolyt/interview-mls/services/api/internal/events"
+	"github.com/anatolyt/interview-mls/services/api/internal/httpapi"
+	"github.com/anatolyt/interview-mls/services/api/internal/hub"
+	"github.com/anatolyt/interview-mls/services/api/internal/store"
 )
 
+// The jobs table is both the record and the queue: attempt, lease_token and
+// lease_expires_at are what make a row claimable work rather than just state.
+// The partial index is the claim query's access path -- it covers exactly the
+// live rows and stays small no matter how much finished history piles up.
 const migration = `
 CREATE TABLE IF NOT EXISTS jobs (
-	id          UUID PRIMARY KEY,
-	filename    TEXT NOT NULL,
-	pdf_key     TEXT NOT NULL,
-	csv_key     TEXT,
-	status      TEXT NOT NULL DEFAULT 'queued',
-	error       TEXT,
-	retry_count INT  NOT NULL DEFAULT 0,
-	created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
-	updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+	id               UUID PRIMARY KEY,
+	filename         TEXT NOT NULL,
+	pdf_key          TEXT NOT NULL,
+	csv_key          TEXT,
+	status           TEXT NOT NULL DEFAULT 'queued',
+	error            TEXT,
+	attempt          INT  NOT NULL DEFAULT 0,
+	lease_token      UUID,
+	lease_expires_at TIMESTAMPTZ,
+	created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+	updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- The queue columns are added separately so a volume carrying a pre-queue jobs
+-- table gets upgraded instead of skipped: CREATE TABLE IF NOT EXISTS is a no-op
+-- on an existing table, which would leave the workers crash-looping on columns
+-- that never appeared. Columns from older shapes are left alone; they're inert.
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS attempt          INT NOT NULL DEFAULT 0;
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS lease_token      UUID;
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS lease_expires_at TIMESTAMPTZ;
+
+CREATE INDEX IF NOT EXISTS jobs_ready_idx ON jobs (created_at)
+	WHERE status IN ('queued', 'processing');
 `
 
 type App struct {
-	cfg   config.Config
-	log   *slog.Logger
-	db    *pgxpool.Pool
-	s3    *minio.Client
-	kafka *kgo.Client
+	cfg config.Config
+	log *slog.Logger
+	db  *pgxpool.Pool
+	s3  *minio.Client
 }
 
 func New(cfg config.Config, log *slog.Logger) *App {
@@ -56,19 +75,21 @@ func (a *App) Run(ctx context.Context) error {
 		return err
 	}
 
+	h := hub.New(a.log)
+	go h.Run()
+	defer h.Close()
+
+	evSrv := events.NewServer(a.log, h)
 	grpcSrv := grpc.NewServer()
-	jobsv1.RegisterJobEventsServer(grpcSrv, jobsv1.UnimplementedJobEventsServer{})
+	jobsv1.RegisterJobEventsServer(grpcSrv, evSrv)
 
 	grpcLn, err := net.Listen("tcp", a.cfg.GRPCAddr)
 	if err != nil {
 		return fmt.Errorf("listen grpc: %w", err)
 	}
 
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	})
-	httpSrv := &http.Server{Addr: a.cfg.HTTPAddr, Handler: mux}
+	handler := httpapi.New(a.log, store.New(a.db), a.s3, a.cfg.MinioBucket, h, evSrv)
+	httpSrv := &http.Server{Addr: a.cfg.HTTPAddr, Handler: handler.Routes()}
 
 	errCh := make(chan error, 2)
 	go func() { errCh <- grpcSrv.Serve(grpcLn) }()
@@ -136,25 +157,10 @@ func (a *App) connect(ctx context.Context) error {
 	}
 	a.s3 = s3
 
-	kafka, err := kgo.NewClient(
-		kgo.SeedBrokers(a.cfg.KafkaBrokers),
-		kgo.DefaultProduceTopic(a.cfg.KafkaTopic),
-	)
-	if err != nil {
-		return fmt.Errorf("kafka client: %w", err)
-	}
-	if err := kafka.Ping(ctx); err != nil {
-		return fmt.Errorf("kafka ping: %w", err)
-	}
-	a.kafka = kafka
-
 	return nil
 }
 
 func (a *App) close() {
-	if a.kafka != nil {
-		a.kafka.Close()
-	}
 	if a.db != nil {
 		a.db.Close()
 	}

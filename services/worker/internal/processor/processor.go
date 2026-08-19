@@ -1,27 +1,37 @@
-// Package processor executes one job end to end: claim, fetch pdf, parse,
+// Package processor executes one claimed job end to end: fetch pdf, parse,
 // upload csv, record the terminal state, notify the api.
 package processor
 
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/minio/minio-go/v7"
-	"github.com/twmb/franz-go/pkg/kgo"
 
 	jobsv1 "github.com/anatolyt/interview-mls/proto/gen/jobsv1"
 	"github.com/anatolyt/interview-mls/services/worker/internal/parser"
 	"github.com/anatolyt/interview-mls/services/worker/internal/store"
 )
 
-// Message is the kafka payload; the api produces the same shape.
-type Message struct {
-	JobID string `json:"job_id"`
+// canceledError is the error text a user-canceled job carries. Cancel reuses
+// the 'failed' terminal state rather than introducing a status value: the
+// schema stays as it is and the distinction lives in text the UI shows anyway.
+const canceledError = "canceled by user"
+
+// emitter is the status channel the processor writes to (the gRPC stream
+// client). It is deliberately fire-and-forget.
+type emitter interface {
+	Send(jobID string, status jobsv1.JobStatus, errMsg string)
+}
+
+// run is the cancel handle for one in-flight job.
+type run struct {
+	cancel   context.CancelFunc
+	canceled bool
 }
 
 type Processor struct {
@@ -29,72 +39,108 @@ type Processor struct {
 	store      *store.Store
 	s3         *minio.Client
 	bucket     string
-	producer   *kgo.Client // requeue channel for bounded retries
-	events     jobsv1.JobEventsClient
+	events     emitter
 	maxRetries int
 	parseDelay time.Duration
+
+	mu      sync.Mutex
+	running map[string]*run
 }
 
 func New(log *slog.Logger, st *store.Store, s3 *minio.Client, bucket string,
-	producer *kgo.Client, events jobsv1.JobEventsClient, maxRetries int, parseDelay time.Duration) *Processor {
+	events emitter, maxRetries int, parseDelay time.Duration) *Processor {
 	return &Processor{
-		log: log, store: st, s3: s3, bucket: bucket,
-		producer: producer, events: events,
+		log: log, store: st, s3: s3, bucket: bucket, events: events,
 		maxRetries: maxRetries, parseDelay: parseDelay,
+		running: make(map[string]*run),
 	}
 }
 
-// Handle processes one kafka record and reports whether the record is safe to
-// forget. It returns true only when the job reached a terminal db state, was
-// successfully requeued (db update *and* replacement message both landed), or
-// was deliberately dropped. A false means the job is still non-terminal with
-// no replacement message in flight, so the offset must not be committed.
-func (p *Processor) Handle(ctx context.Context, rec *kgo.Record) (commit bool) {
-	var msg Message
-	if err := json.Unmarshal(rec.Value, &msg); err != nil {
-		p.log.Error("poison message: bad json, dropping", "value", string(rec.Value), "err", err)
-		return true
+// Cancel interrupts a job this worker is currently processing. A command for a
+// job we don't hold is a no-op: the api routes to the last worker that reported
+// PROCESSING, and losing that race just means nobody gets canceled.
+func (p *Processor) Cancel(jobID string) {
+	p.mu.Lock()
+	r, ok := p.running[jobID]
+	if ok {
+		r.canceled = true
 	}
-	if _, err := uuid.Parse(msg.JobID); err != nil {
-		p.log.Error("poison message: bad job id, dropping", "job_id", msg.JobID)
-		return true
+	p.mu.Unlock()
+	if !ok {
+		p.log.Info("cancel ignored, job not held by this worker", "job_id", jobID)
+		return
 	}
-	log := p.log.With("job_id", msg.JobID)
+	r.cancel()
+}
 
-	claim, skip, err := p.store.Claim(ctx, msg.JobID)
-	if err != nil {
-		// db unreachable: nothing was recorded, so the message must survive.
-		log.Error("claim failed", "err", err)
-		return false
-	}
-	if skip {
-		log.Info("job missing or already terminal, skipping")
-		return true
-	}
-	log = log.With("attempt", claim.Attempt)
+// ProcessJob runs one claimed job. Every state write is fenced on the claim's
+// lease token, so losing the lease mid-job costs a log line, never a bogus
+// terminal state.
+func (p *Processor) ProcessJob(ctx context.Context, c store.Claim) {
+	log := p.log.With("job_id", c.JobID, "attempt", c.Attempt)
+	log.Info("claimed job")
 
-	if claim.Attempt > p.maxRetries {
-		log.Warn("retries exhausted, failing job")
-		return p.finish(ctx, log, msg.JobID, jobsv1.JobStatus_JOB_STATUS_FAILED, "",
-			fmt.Sprintf("failed after %d attempts", p.maxRetries))
-	}
+	// The job's own context is what a cancel command interrupts; the terminal
+	// write afterwards deliberately uses the parent, which is still alive.
+	jobCtx, cancel := p.begin(ctx, c.JobID)
+	defer p.end(c.JobID, cancel)
 
-	p.notify(ctx, log, msg.JobID, jobsv1.JobStatus_JOB_STATUS_PROCESSING, "")
+	p.notify(log, c.JobID, jobsv1.JobStatus_JOB_STATUS_PROCESSING, "")
 
-	csvKey, err := p.process(ctx, msg.JobID, claim.PdfKey)
-	if err != nil {
-		log.Error("processing failed", "err", err)
-		if claim.Attempt >= p.maxRetries {
-			return p.finish(ctx, log, msg.JobID, jobsv1.JobStatus_JOB_STATUS_FAILED, "", err.Error())
-		}
-		return p.requeue(ctx, log, msg.JobID, err.Error())
+	csvKey, err := p.process(jobCtx, c.JobID, c.PdfKey)
+	if err == nil {
+		p.finish(ctx, log, c, jobsv1.JobStatus_JOB_STATUS_DONE, csvKey, "")
+		return
 	}
 
-	if !p.finish(ctx, log, msg.JobID, jobsv1.JobStatus_JOB_STATUS_DONE, csvKey, "") {
-		return false
+	// A canceled job is terminal on the spot -- retrying something a user just
+	// asked us to stop would be absurd.
+	if p.wasCanceled(c.JobID) {
+		log.Info("job canceled by user")
+		p.finish(ctx, log, c, jobsv1.JobStatus_JOB_STATUS_FAILED, "", canceledError)
+		return
 	}
-	log.Info("job done", "csv_key", csvKey)
-	return true
+
+	log.Error("processing failed", "err", err)
+	if c.Attempt >= p.maxRetries {
+		p.finish(ctx, log, c, jobsv1.JobStatus_JOB_STATUS_FAILED, "", err.Error())
+		return
+	}
+
+	ok, rerr := p.store.Requeue(ctx, c.JobID, c.LeaseToken, err.Error())
+	switch {
+	case rerr != nil:
+		// Nothing recorded, but the lease still expires -- the claim query
+		// picks the job back up on its own. No requeue path needed.
+		log.Error("requeue", "err", rerr)
+	case !ok:
+		log.Warn("lost lease before requeue, another worker owns this job")
+	default:
+		p.notify(log, c.JobID, jobsv1.JobStatus_JOB_STATUS_QUEUED, err.Error())
+		log.Info("job requeued for retry")
+	}
+}
+
+func (p *Processor) begin(ctx context.Context, jobID string) (context.Context, context.CancelFunc) {
+	jobCtx, cancel := context.WithCancel(ctx)
+	p.mu.Lock()
+	p.running[jobID] = &run{cancel: cancel}
+	p.mu.Unlock()
+	return jobCtx, cancel
+}
+
+func (p *Processor) end(jobID string, cancel context.CancelFunc) {
+	p.mu.Lock()
+	delete(p.running, jobID)
+	p.mu.Unlock()
+	cancel()
+}
+
+func (p *Processor) wasCanceled(jobID string) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	r, ok := p.running[jobID]
+	return ok && r.canceled
 }
 
 func (p *Processor) process(ctx context.Context, jobID, pdfKey string) (string, error) {
@@ -135,53 +181,41 @@ func (p *Processor) process(ctx context.Context, jobID, pdfKey string) (string, 
 	return csvKey, nil
 }
 
-// finish records the terminal state. It reports false when the db write
-// failed: the job is still 'processing' and only a redelivery can resolve it.
-func (p *Processor) finish(ctx context.Context, log *slog.Logger, jobID string, st jobsv1.JobStatus, csvKey, errMsg string) bool {
-	var err error
+// finish records the terminal state under the fence. A write that fails or
+// finds no row leaves the job at 'processing' with an expiring lease, which
+// the claim query and the janitor between them always resolve.
+func (p *Processor) finish(ctx context.Context, log *slog.Logger, c store.Claim, st jobsv1.JobStatus, csvKey, errMsg string) {
+	var (
+		ok  bool
+		err error
+	)
 	if st == jobsv1.JobStatus_JOB_STATUS_DONE {
-		err = p.store.SetDone(ctx, jobID, csvKey)
+		ok, err = p.store.SetDone(ctx, c.JobID, c.LeaseToken, csvKey)
 	} else {
-		err = p.store.SetFailed(ctx, jobID, errMsg)
+		ok, err = p.store.SetFailed(ctx, c.JobID, c.LeaseToken, errMsg)
 	}
-	if err != nil {
-		log.Error("record terminal state", "err", err)
-		return false
+	switch {
+	case err != nil:
+		log.Error("record terminal state", "status", st.String(), "err", err)
+	case !ok:
+		log.Warn("lost lease before terminal write, another worker owns this job", "status", st.String())
+	default:
+		log.Info("job "+terminalWord(st), "csv_key", csvKey, "error", errMsg)
+		p.notify(log, c.JobID, st, errMsg)
 	}
-	p.notify(ctx, log, jobID, st, errMsg)
-	return true
 }
 
-// requeue hands the job to a future delivery. It reports true only when both
-// halves landed; a produce failure after the db update would otherwise strand
-// the job at 'queued' with no message anywhere.
-func (p *Processor) requeue(ctx context.Context, log *slog.Logger, jobID, lastErr string) bool {
-	if err := p.store.Requeue(ctx, jobID, lastErr); err != nil {
-		log.Error("requeue db update", "err", err)
-		return false
+func terminalWord(st jobsv1.JobStatus) string {
+	if st == jobsv1.JobStatus_JOB_STATUS_DONE {
+		return "done"
 	}
-	payload, _ := json.Marshal(Message{JobID: jobID})
-	res := p.producer.ProduceSync(ctx, &kgo.Record{Key: []byte(jobID), Value: payload})
-	if err := res.FirstErr(); err != nil {
-		log.Error("requeue produce", "err", err)
-		return false
-	}
-	p.notify(ctx, log, jobID, jobsv1.JobStatus_JOB_STATUS_QUEUED, lastErr)
-	log.Info("job requeued for retry")
-	return true
+	return "failed"
 }
 
-// notify is best-effort: a job's fate lives in the db, the push channel is
-// only a hint for connected UIs.
-func (p *Processor) notify(ctx context.Context, log *slog.Logger, jobID string, st jobsv1.JobStatus, errMsg string) {
-	callCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
-	defer cancel()
-	_, err := p.events.NotifyStatus(callCtx, &jobsv1.NotifyStatusRequest{
-		JobId:  jobID,
-		Status: st,
-		Error:  errMsg,
-	})
-	if err != nil {
-		log.Warn("notify api failed", "status", st.String(), "err", err)
-	}
+// notify is best-effort and never blocks: a job's fate lives in the db, the
+// push channel is only a hint for connected UIs. Send queues onto the stream
+// client's buffer, so an unreachable api costs nothing here.
+func (p *Processor) notify(log *slog.Logger, jobID string, st jobsv1.JobStatus, errMsg string) {
+	log.Debug("status event", "status", st.String())
+	p.events.Send(jobID, st, errMsg)
 }

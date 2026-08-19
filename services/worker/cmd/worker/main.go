@@ -16,7 +16,7 @@ func main() {
 
 	root := &cobra.Command{
 		Use:   "worker",
-		Short: "MLS worker: consumes jobs from kafka, parses pdf to csv",
+		Short: "MLS worker: claims jobs from postgres, parses pdf to csv",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return app.New(config.FromEnv(), log).Run(context.Background())
 		},

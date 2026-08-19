@@ -76,30 +76,78 @@ func (JobStatus) EnumDescriptor() ([]byte, []int) {
 	return file_jobs_proto_rawDescGZIP(), []int{0}
 }
 
-type NotifyStatusRequest struct {
+type CommandType int32
+
+const (
+	CommandType_COMMAND_TYPE_UNSPECIFIED CommandType = 0
+	CommandType_COMMAND_TYPE_CANCEL      CommandType = 1
+)
+
+// Enum value maps for CommandType.
+var (
+	CommandType_name = map[int32]string{
+		0: "COMMAND_TYPE_UNSPECIFIED",
+		1: "COMMAND_TYPE_CANCEL",
+	}
+	CommandType_value = map[string]int32{
+		"COMMAND_TYPE_UNSPECIFIED": 0,
+		"COMMAND_TYPE_CANCEL":      1,
+	}
+)
+
+func (x CommandType) Enum() *CommandType {
+	p := new(CommandType)
+	*p = x
+	return p
+}
+
+func (x CommandType) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (CommandType) Descriptor() protoreflect.EnumDescriptor {
+	return file_jobs_proto_enumTypes[1].Descriptor()
+}
+
+func (CommandType) Type() protoreflect.EnumType {
+	return &file_jobs_proto_enumTypes[1]
+}
+
+func (x CommandType) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use CommandType.Descriptor instead.
+func (CommandType) EnumDescriptor() ([]byte, []int) {
+	return file_jobs_proto_rawDescGZIP(), []int{1}
+}
+
+type WorkerEvent struct {
 	state  protoimpl.MessageState `protogen:"open.v1"`
 	JobId  string                 `protobuf:"bytes,1,opt,name=job_id,json=jobId,proto3" json:"job_id,omitempty"`
 	Status JobStatus              `protobuf:"varint,2,opt,name=status,proto3,enum=mls.v1.JobStatus" json:"status,omitempty"`
-	// set only when status == FAILED
-	Error         string `protobuf:"bytes,3,opt,name=error,proto3" json:"error,omitempty"`
+	// set only when status == FAILED or a retry is queued after an error
+	Error string `protobuf:"bytes,3,opt,name=error,proto3" json:"error,omitempty"`
+	// identifies the sender so the api can route commands back to it
+	WorkerId      string `protobuf:"bytes,4,opt,name=worker_id,json=workerId,proto3" json:"worker_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *NotifyStatusRequest) Reset() {
-	*x = NotifyStatusRequest{}
+func (x *WorkerEvent) Reset() {
+	*x = WorkerEvent{}
 	mi := &file_jobs_proto_msgTypes[0]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *NotifyStatusRequest) String() string {
+func (x *WorkerEvent) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*NotifyStatusRequest) ProtoMessage() {}
+func (*WorkerEvent) ProtoMessage() {}
 
-func (x *NotifyStatusRequest) ProtoReflect() protoreflect.Message {
+func (x *WorkerEvent) ProtoReflect() protoreflect.Message {
 	mi := &file_jobs_proto_msgTypes[0]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -111,52 +159,61 @@ func (x *NotifyStatusRequest) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use NotifyStatusRequest.ProtoReflect.Descriptor instead.
-func (*NotifyStatusRequest) Descriptor() ([]byte, []int) {
+// Deprecated: Use WorkerEvent.ProtoReflect.Descriptor instead.
+func (*WorkerEvent) Descriptor() ([]byte, []int) {
 	return file_jobs_proto_rawDescGZIP(), []int{0}
 }
 
-func (x *NotifyStatusRequest) GetJobId() string {
+func (x *WorkerEvent) GetJobId() string {
 	if x != nil {
 		return x.JobId
 	}
 	return ""
 }
 
-func (x *NotifyStatusRequest) GetStatus() JobStatus {
+func (x *WorkerEvent) GetStatus() JobStatus {
 	if x != nil {
 		return x.Status
 	}
 	return JobStatus_JOB_STATUS_UNSPECIFIED
 }
 
-func (x *NotifyStatusRequest) GetError() string {
+func (x *WorkerEvent) GetError() string {
 	if x != nil {
 		return x.Error
 	}
 	return ""
 }
 
-type NotifyStatusResponse struct {
+func (x *WorkerEvent) GetWorkerId() string {
+	if x != nil {
+		return x.WorkerId
+	}
+	return ""
+}
+
+type Command struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
+	JobId         string                 `protobuf:"bytes,1,opt,name=job_id,json=jobId,proto3" json:"job_id,omitempty"`
+	Type          CommandType            `protobuf:"varint,2,opt,name=type,proto3,enum=mls.v1.CommandType" json:"type,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *NotifyStatusResponse) Reset() {
-	*x = NotifyStatusResponse{}
+func (x *Command) Reset() {
+	*x = Command{}
 	mi := &file_jobs_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *NotifyStatusResponse) String() string {
+func (x *Command) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*NotifyStatusResponse) ProtoMessage() {}
+func (*Command) ProtoMessage() {}
 
-func (x *NotifyStatusResponse) ProtoReflect() protoreflect.Message {
+func (x *Command) ProtoReflect() protoreflect.Message {
 	mi := &file_jobs_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -168,9 +225,23 @@ func (x *NotifyStatusResponse) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use NotifyStatusResponse.ProtoReflect.Descriptor instead.
-func (*NotifyStatusResponse) Descriptor() ([]byte, []int) {
+// Deprecated: Use Command.ProtoReflect.Descriptor instead.
+func (*Command) Descriptor() ([]byte, []int) {
 	return file_jobs_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *Command) GetJobId() string {
+	if x != nil {
+		return x.JobId
+	}
+	return ""
+}
+
+func (x *Command) GetType() CommandType {
+	if x != nil {
+		return x.Type
+	}
+	return CommandType_COMMAND_TYPE_UNSPECIFIED
 }
 
 var File_jobs_proto protoreflect.FileDescriptor
@@ -178,20 +249,26 @@ var File_jobs_proto protoreflect.FileDescriptor
 const file_jobs_proto_rawDesc = "" +
 	"\n" +
 	"\n" +
-	"jobs.proto\x12\x06mls.v1\"m\n" +
-	"\x13NotifyStatusRequest\x12\x15\n" +
+	"jobs.proto\x12\x06mls.v1\"\x82\x01\n" +
+	"\vWorkerEvent\x12\x15\n" +
 	"\x06job_id\x18\x01 \x01(\tR\x05jobId\x12)\n" +
 	"\x06status\x18\x02 \x01(\x0e2\x11.mls.v1.JobStatusR\x06status\x12\x14\n" +
-	"\x05error\x18\x03 \x01(\tR\x05error\"\x16\n" +
-	"\x14NotifyStatusResponse*\x85\x01\n" +
+	"\x05error\x18\x03 \x01(\tR\x05error\x12\x1b\n" +
+	"\tworker_id\x18\x04 \x01(\tR\bworkerId\"I\n" +
+	"\aCommand\x12\x15\n" +
+	"\x06job_id\x18\x01 \x01(\tR\x05jobId\x12'\n" +
+	"\x04type\x18\x02 \x01(\x0e2\x13.mls.v1.CommandTypeR\x04type*\x85\x01\n" +
 	"\tJobStatus\x12\x1a\n" +
 	"\x16JOB_STATUS_UNSPECIFIED\x10\x00\x12\x15\n" +
 	"\x11JOB_STATUS_QUEUED\x10\x01\x12\x19\n" +
 	"\x15JOB_STATUS_PROCESSING\x10\x02\x12\x13\n" +
 	"\x0fJOB_STATUS_DONE\x10\x03\x12\x15\n" +
-	"\x11JOB_STATUS_FAILED\x10\x042V\n" +
-	"\tJobEvents\x12I\n" +
-	"\fNotifyStatus\x12\x1b.mls.v1.NotifyStatusRequest\x1a\x1c.mls.v1.NotifyStatusResponseB4Z2github.com/anatolyt/interview-mls/proto/gen/jobsv1b\x06proto3"
+	"\x11JOB_STATUS_FAILED\x10\x04*D\n" +
+	"\vCommandType\x12\x1c\n" +
+	"\x18COMMAND_TYPE_UNSPECIFIED\x10\x00\x12\x17\n" +
+	"\x13COMMAND_TYPE_CANCEL\x10\x012@\n" +
+	"\tJobEvents\x123\n" +
+	"\aConnect\x12\x13.mls.v1.WorkerEvent\x1a\x0f.mls.v1.Command(\x010\x01B4Z2github.com/anatolyt/interview-mls/proto/gen/jobsv1b\x06proto3"
 
 var (
 	file_jobs_proto_rawDescOnce sync.Once
@@ -205,22 +282,24 @@ func file_jobs_proto_rawDescGZIP() []byte {
 	return file_jobs_proto_rawDescData
 }
 
-var file_jobs_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
+var file_jobs_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
 var file_jobs_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
 var file_jobs_proto_goTypes = []any{
-	(JobStatus)(0),               // 0: mls.v1.JobStatus
-	(*NotifyStatusRequest)(nil),  // 1: mls.v1.NotifyStatusRequest
-	(*NotifyStatusResponse)(nil), // 2: mls.v1.NotifyStatusResponse
+	(JobStatus)(0),      // 0: mls.v1.JobStatus
+	(CommandType)(0),    // 1: mls.v1.CommandType
+	(*WorkerEvent)(nil), // 2: mls.v1.WorkerEvent
+	(*Command)(nil),     // 3: mls.v1.Command
 }
 var file_jobs_proto_depIdxs = []int32{
-	0, // 0: mls.v1.NotifyStatusRequest.status:type_name -> mls.v1.JobStatus
-	1, // 1: mls.v1.JobEvents.NotifyStatus:input_type -> mls.v1.NotifyStatusRequest
-	2, // 2: mls.v1.JobEvents.NotifyStatus:output_type -> mls.v1.NotifyStatusResponse
-	2, // [2:3] is the sub-list for method output_type
-	1, // [1:2] is the sub-list for method input_type
-	1, // [1:1] is the sub-list for extension type_name
-	1, // [1:1] is the sub-list for extension extendee
-	0, // [0:1] is the sub-list for field type_name
+	0, // 0: mls.v1.WorkerEvent.status:type_name -> mls.v1.JobStatus
+	1, // 1: mls.v1.Command.type:type_name -> mls.v1.CommandType
+	2, // 2: mls.v1.JobEvents.Connect:input_type -> mls.v1.WorkerEvent
+	3, // 3: mls.v1.JobEvents.Connect:output_type -> mls.v1.Command
+	3, // [3:4] is the sub-list for method output_type
+	2, // [2:3] is the sub-list for method input_type
+	2, // [2:2] is the sub-list for extension type_name
+	2, // [2:2] is the sub-list for extension extendee
+	0, // [0:2] is the sub-list for field type_name
 }
 
 func init() { file_jobs_proto_init() }
@@ -233,7 +312,7 @@ func file_jobs_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_jobs_proto_rawDesc), len(file_jobs_proto_rawDesc)),
-			NumEnums:      1,
+			NumEnums:      2,
 			NumMessages:   2,
 			NumExtensions: 0,
 			NumServices:   1,

@@ -19,17 +19,22 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	JobEvents_NotifyStatus_FullMethodName = "/mls.v1.JobEvents/NotifyStatus"
+	JobEvents_Connect_FullMethodName = "/mls.v1.JobEvents/Connect"
 )
 
 // JobEventsClient is the client API for JobEvents service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 //
-// JobEvents is served by the api; workers call it to report job status
-// transitions, which the api fans out to connected websocket clients.
+// JobEvents is served by the api. Each worker opens exactly one long-lived
+// stream at startup and keeps it for the life of the process.
+//
+// It is bidirectional because cancellation is a routing problem: pg_notify
+// broadcasts, but a cancel has to reach the one worker currently holding the
+// job's lease. Status events flow worker->api and are fanned out to websocket
+// clients; control commands flow api->worker.
 type JobEventsClient interface {
-	NotifyStatus(ctx context.Context, in *NotifyStatusRequest, opts ...grpc.CallOption) (*NotifyStatusResponse, error)
+	Connect(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[WorkerEvent, Command], error)
 }
 
 type jobEventsClient struct {
@@ -40,24 +45,32 @@ func NewJobEventsClient(cc grpc.ClientConnInterface) JobEventsClient {
 	return &jobEventsClient{cc}
 }
 
-func (c *jobEventsClient) NotifyStatus(ctx context.Context, in *NotifyStatusRequest, opts ...grpc.CallOption) (*NotifyStatusResponse, error) {
+func (c *jobEventsClient) Connect(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[WorkerEvent, Command], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(NotifyStatusResponse)
-	err := c.cc.Invoke(ctx, JobEvents_NotifyStatus_FullMethodName, in, out, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &JobEvents_ServiceDesc.Streams[0], JobEvents_Connect_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
-	return out, nil
+	x := &grpc.GenericClientStream[WorkerEvent, Command]{ClientStream: stream}
+	return x, nil
 }
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type JobEvents_ConnectClient = grpc.BidiStreamingClient[WorkerEvent, Command]
 
 // JobEventsServer is the server API for JobEvents service.
 // All implementations must embed UnimplementedJobEventsServer
 // for forward compatibility.
 //
-// JobEvents is served by the api; workers call it to report job status
-// transitions, which the api fans out to connected websocket clients.
+// JobEvents is served by the api. Each worker opens exactly one long-lived
+// stream at startup and keeps it for the life of the process.
+//
+// It is bidirectional because cancellation is a routing problem: pg_notify
+// broadcasts, but a cancel has to reach the one worker currently holding the
+// job's lease. Status events flow worker->api and are fanned out to websocket
+// clients; control commands flow api->worker.
 type JobEventsServer interface {
-	NotifyStatus(context.Context, *NotifyStatusRequest) (*NotifyStatusResponse, error)
+	Connect(grpc.BidiStreamingServer[WorkerEvent, Command]) error
 	mustEmbedUnimplementedJobEventsServer()
 }
 
@@ -68,8 +81,8 @@ type JobEventsServer interface {
 // pointer dereference when methods are called.
 type UnimplementedJobEventsServer struct{}
 
-func (UnimplementedJobEventsServer) NotifyStatus(context.Context, *NotifyStatusRequest) (*NotifyStatusResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method NotifyStatus not implemented")
+func (UnimplementedJobEventsServer) Connect(grpc.BidiStreamingServer[WorkerEvent, Command]) error {
+	return status.Errorf(codes.Unimplemented, "method Connect not implemented")
 }
 func (UnimplementedJobEventsServer) mustEmbedUnimplementedJobEventsServer() {}
 func (UnimplementedJobEventsServer) testEmbeddedByValue()                   {}
@@ -92,23 +105,12 @@ func RegisterJobEventsServer(s grpc.ServiceRegistrar, srv JobEventsServer) {
 	s.RegisterService(&JobEvents_ServiceDesc, srv)
 }
 
-func _JobEvents_NotifyStatus_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(NotifyStatusRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(JobEventsServer).NotifyStatus(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: JobEvents_NotifyStatus_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(JobEventsServer).NotifyStatus(ctx, req.(*NotifyStatusRequest))
-	}
-	return interceptor(ctx, in, info, handler)
+func _JobEvents_Connect_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(JobEventsServer).Connect(&grpc.GenericServerStream[WorkerEvent, Command]{ServerStream: stream})
 }
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type JobEvents_ConnectServer = grpc.BidiStreamingServer[WorkerEvent, Command]
 
 // JobEvents_ServiceDesc is the grpc.ServiceDesc for JobEvents service.
 // It's only intended for direct use with grpc.RegisterService,
@@ -116,12 +118,14 @@ func _JobEvents_NotifyStatus_Handler(srv interface{}, ctx context.Context, dec f
 var JobEvents_ServiceDesc = grpc.ServiceDesc{
 	ServiceName: "mls.v1.JobEvents",
 	HandlerType: (*JobEventsServer)(nil),
-	Methods: []grpc.MethodDesc{
+	Methods:     []grpc.MethodDesc{},
+	Streams: []grpc.StreamDesc{
 		{
-			MethodName: "NotifyStatus",
-			Handler:    _JobEvents_NotifyStatus_Handler,
+			StreamName:    "Connect",
+			Handler:       _JobEvents_Connect_Handler,
+			ServerStreams: true,
+			ClientStreams: true,
 		},
 	},
-	Streams:  []grpc.StreamDesc{},
 	Metadata: "jobs.proto",
 }
